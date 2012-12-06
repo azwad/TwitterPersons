@@ -9,6 +9,7 @@ use lib qw( /home/toshi/perl/lib );
 use Encode;
 use feature 'say';
 use Storable qw(nstore retrieve);
+#use Pause qw( pause );
 
 sub new {
 	my $proto = shift;
@@ -30,63 +31,48 @@ sub named {
 	return $self;
 }
 
+sub init {
+	my $self = shift;
+	say 'initialize';
+	$self->_get_prof;
+	$self->_serialize;
+	return $self;
+}
 sub renew {
 	my $self = shift;
 	$self->init;
-	return $self;
-}
-
-sub init {
-	my $self = shift;
-	$self->_get_prof;
 	$self->_has_connection;
 	$self->_get_mutual_users;
 	$self->_serialize;
 	return $self;
 }
 
-sub _serialize {
+
+sub get_connection {
 	my $self = shift;
-	my $screen_name = $self->screen_name;
-	my $serialize = {
-		screen_name => $self->{screen_name},
-		prof				=> $self->{prof},
-		friends			=> $self->{friends},
-		followers		=> $self->{followers},
-		mutuals			=> $self->{mutuals},
-		following		=> $self->{following},
-		followed		=> $self->{followed},
-	};
-	unless ( -d './dat'){
-		mkdir 'dat';
+	say 'get connection';
+	my $screen_name = $self->{screen_name};
+	if ( -e  "./dat/${screen_name}.dat")  {
+		$self->_reserialize;
 	}
-	my $data_file = "./dat/${screen_name}.dat";
-	say "store to $data_file";
-	nstore $serialize, $data_file;
-	return;
-}
-
-sub _reserialize {
-	my $self = shift;
-	my $screen_name = $self->screen_name;
-	my $data_file = "./dat/${screen_name}.dat";
-	say "retirive from $data_file";
-	my $serialize2 = retrieve $data_file;
-
-	$self->{screen_name}	= $serialize2->{screen_name};
-	$self->{prof}					= $serialize2->{prof};
-	$self->{friends}			= $serialize2->{friends};
-	$self->{followers}		= $serialize2->{followers};
-	$self->{mutuals}			= $serialize2->{mutuals};
-	$self->{following}		= $serialize2->{following};
-	$self->{followed}			=	$serialize2->{followed};
+	unless ( $self->{friends}->[0]->{screen_name} ){
+		say "not definef friends";
+		$self->_has_connection;
+		$self->_get_mutual_users;
+		if ($self->{err}){
+			say "twitter api is busy";
+		}
+		$self->_serialize;
+	}
 	return $self;
 }
 
 sub _has_connection {
 	my $self = shift;
 	my $screen_name = $self->{screen_name};
+	say 'get friends';
 	my @friends = _get_users($screen_name, 'friends');
+	say 'get followers';
 	my @followers = _get_users($screen_name, 'followers');
 	$self->{friends} = \@friends;
 	$self->{followers} = \@followers;
@@ -128,6 +114,11 @@ sub followed {
 	return $self->{followed};
 }
 
+sub err {
+	my $self = shift;
+	return $self->{err};
+}
+
 sub _get_prof {
 	my $self = shift;
 	my $mech = WWW::Mechanize->new;
@@ -135,8 +126,12 @@ sub _get_prof {
 	my $screen_name = $self->{screen_name};
 	say "getting ${screen_name}'s profile";
 	my $url = $api_url . $screen_name;
-	$mech->get($url);
-
+	eval { $mech->get($url)};
+	if ($@){
+		say $@;
+		$self->{err} = 1;
+		return $self; 
+	}
 	my $content = $mech->content;
 
 	$content = uri_unescape($content);
@@ -161,7 +156,11 @@ sub _get_users {
 	while( $cursor != 0) {
 		say "wait a while";
 		my $url = $api_url . $method . '/' .$screen_name . '.xml?cursor=' . $cursor;
-		$mech->get($url);
+		eval {$mech->get($url)};
+		if ($@){
+			say $@;
+			return undef; 
+		}
 		my $content = $mech->content;
 		say $mech->uri;
 		my $xml = XMLin($content);
@@ -192,7 +191,6 @@ sub _get_users {
 	return @users;
 }
 
-
 sub _get_mutual_users {
 	my $self = shift;
 	my $friends = $self->friends;
@@ -221,9 +219,7 @@ sub _get_mutual_users {
 		next if $flag;
 		say "following : $friend_name";
 		push (@following, $friend);
-#		sleep 1;
 	}
-
 
 	say "check end following"; 
 	sleep 2;
@@ -245,7 +241,6 @@ sub _get_mutual_users {
 		next if $flag;
 		say "followed by : $follower_name";
 		push (@followed, $follower);
-#		sleep 1;
 	}
 
 	$self->{mutuals} = \@mutuals;
@@ -256,4 +251,45 @@ sub _get_mutual_users {
 	sleep 3;
 	return $self;
 }		
+
+sub _serialize {
+	my $self = shift;
+	my $screen_name = $self->screen_name;
+	my $serialize = {
+		screen_name => $self->{screen_name},
+		prof				=> $self->{prof},
+		friends			=> $self->{friends} || undef,
+		followers		=> $self->{followers} || undef,
+		mutuals			=> $self->{mutuals} || undef, 
+		following		=> $self->{following} || undef,
+		followed		=> $self->{followed} || undef,
+		err					=> $self->{err} || undef,
+	};
+	unless ( -d './dat'){
+		mkdir 'dat';
+	}
+	my $data_file = "./dat/${screen_name}.dat";
+	say "store to $data_file";
+	nstore $serialize, $data_file;
+	return;
+}
+
+sub _reserialize {
+	my $self = shift;
+	my $screen_name = $self->screen_name;
+	my $data_file = "./dat/${screen_name}.dat";
+	say "retirive from $data_file";
+	my $serialize2 = retrieve $data_file;
+
+	$self->{screen_name}	= $serialize2->{screen_name};
+	$self->{prof}					= $serialize2->{prof};
+	$self->{friends}			= $serialize2->{friends};
+	$self->{followers}		= $serialize2->{followers};
+	$self->{mutuals}			= $serialize2->{mutuals};
+	$self->{following}		= $serialize2->{following};
+	$self->{followed}			=	$serialize2->{followed};
+	$self->{err} 					= $serialize2->{err};
+	return $self;
+}
+
 1;
